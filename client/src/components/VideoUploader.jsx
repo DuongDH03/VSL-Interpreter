@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
-export default function MediaPipeVideoUploader({ onLandmarks }) {
+export default function MediaPipeVideoUploader({ onLandmarks, onVideoUpload }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [stream, setStream] = useState(null);
@@ -12,16 +12,22 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isCameraOn, setIsCameraOn] = useState(false); // Added: State to track camera status
-
   // Store MediaPipe model instances in refs so they persist between renders
   const handsRef = useRef(null);
   const poseRef = useRef(null);
   const cameraRef = useRef(null);
-
-  // Combined callback for MediaPipe results from both models
-  const onFrameResults = useCallback((handsResults, poseResults) => {
+  
+  // Add a ref to track if component is mounted
+  const mountedRef = useRef(true);
+  
+  // Store the latest results for hands and pose
+  const lastHandsResults = useRef(null);
+  const lastPoseResults = useRef(null);
+  
+  // Function to render both hand and pose results
+  const renderResults = useCallback(() => {
     if (!canvasRef.current || !videoRef.current) return;
-
+    
     const canvasCtx = canvasRef.current.getContext('2d');
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -32,6 +38,9 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
 
     // Draw the video frame onto the canvas
     canvasCtx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+    
+    const handsResults = lastHandsResults.current;
+    const poseResults = lastPoseResults.current;
 
     // --- Draw Hand Landmarks ---
     if (handsResults && handsResults.multiHandLandmarks && handsResults.multiHandLandmarks.length > 0) {
@@ -117,9 +126,7 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
       }
     } else {
       setPoseJsonData('No pose detected.');
-    }
-
-    // Call onLandmarks with combined data if both models are active
+    }    // Call onLandmarks with combined data if available
     if (onLandmarks) {
         onLandmarks({
             hands: handsResults?.multiHandLandmarks || null,
@@ -129,11 +136,34 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
 
     canvasCtx.restore();
   }, [onLandmarks]);
-
-
+  // Combined callback for MediaPipe results from both models
+  const onFrameResults = useCallback((handsResults, poseResults) => {
+    // Skip processing if component is unmounting
+    if (!videoRef.current || !canvasRef.current || !mountedRef.current) return;
+    
+    if (handsResults) {
+      lastHandsResults.current = handsResults;
+      console.log("Received hand results:", 
+        handsResults.multiHandLandmarks?.length > 0 ? 
+        `${handsResults.multiHandLandmarks.length} hands detected` : 
+        "No hands detected");
+    }
+    
+    if (poseResults) {
+      lastPoseResults.current = poseResults;
+      console.log("Received pose results:",
+        poseResults.poseLandmarks ? 
+        "Pose detected" : 
+        "No pose detected");
+    }
+    
+    // Render with the latest available data for both models
+    renderResults();
+  }, [renderResults]);
   // Load MediaPipe Hands, Pose, Camera_Utils, and Drawing_Utils models
   useEffect(() => {
-    let isComponentMounted = true;
+    // Set mountedRef to true when component mounts
+    mountedRef.current = true;
     
     const loadScript = (src, id) => {
       return new Promise((resolve, reject) => {
@@ -148,11 +178,9 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
         script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
         document.head.appendChild(script);
       });
-    };
-
-    async function loadMediaPipeLibraries() {
+    };    async function loadMediaPipeLibraries() {
       try {
-        if (!isComponentMounted) return;
+        if (!mountedRef.current) return;
         
         setIsLoading(true);
 
@@ -186,13 +214,13 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
               modelComplexity: 1,
               minDetectionConfidence: 0.5,
               minTrackingConfidence: 0.5
-            });
-
-            // Create a wrapper for onResults that correctly handles our combined approach
+            });            // Create a wrapper for onResults that handles hand results
             handsInstance.onResults((results) => {
-              // Call our combined callback with the hand results and null for pose
-              onFrameResults(results, null);
-              console.log("Hand model received results");
+              // Only process if component is still mounted
+              if (mountedRef.current) {
+                onFrameResults(results, null);
+                console.log("Hand model received results");
+              }
             });
 
             handsRef.current = handsInstance;
@@ -212,12 +240,12 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
               smoothLandmarks: true,
               minDetectionConfidence: 0.5,
               minTrackingConfidence: 0.5
-            });
-
-            poseInstance.onResults((results) => {
-              // Call our combined callback with null for hands and the pose results
-              onFrameResults(null, results);
-              console.log("Pose model received results");
+            });            poseInstance.onResults((results) => {
+              // Only process if component is still mounted
+              if (mountedRef.current) {
+                onFrameResults(null, results);
+                console.log("Pose model received results");
+              }
             });
         
             poseRef.current = poseInstance;
@@ -254,70 +282,97 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
             setCamera(cameraInstance);
             console.log("Camera instance created but not started yet");
           }
-        
-          if (isComponentMounted) {
+          if (mountedRef.current) {
             setIsLoading(false);
             console.log("MediaPipe initialization complete");
           }
         } else {
           throw new Error("MediaPipe global objects not found after script load.");
         }
-      } catch (err) {
-        console.error("Failed to load MediaPipe libraries or initialize model:", err);
-        if (isComponentMounted) {
+      } catch (err) {        console.error("Failed to load MediaPipe libraries or initialize model:", err);
+        if (mountedRef.current) {
           setError("Failed to load tracking models. Please check your internet connection and try again.");
           setIsLoading(false);
         }
       }
     }
 
-    loadMediaPipeLibraries();
-
-    // Cleanup function
+    loadMediaPipeLibraries();    // Cleanup function
     return () => {
-      isComponentMounted = false;
+      // Mark component as unmounted first - this prevents any async operations from continuing
+      mountedRef.current = false;
+      console.log("Component unmounting - cleanup starting");
       
-      // Clean up camera first
+      // We need to ensure this cleanup only runs during actual unmounting, not during re-renders
+      // The check below was causing issues - removing it to ensure proper cleanup
+        // Clean up camera if active
       if (cameraRef.current) {
-        console.log("Stopping camera...");
-        cameraRef.current.stop();
-        setCamera(null);
+        try {
+          console.log("Stopping camera...");
+          cameraRef.current.stop();
+        } catch (err) {
+          console.error("Error stopping camera:", err);
+        }
       }
 
-      // Clean up model instances after a short delay to allow pending operations to complete
+      // Clean up media stream if active
       if (stream) {
-        console.log("Stopping media stream...");
-        stream.getTracks().forEach(track => track.stop());
-        setStream(null);
+        try {
+          console.log("Stopping media stream...");
+          stream.getTracks().forEach(track => track.stop());
+        } catch (err) {
+          console.error("Error stopping media stream:", err);
+        }
       }
       
-      // Use setTimeout to avoid race conditions
-      const cleanupModels = () => {
+      // Don't use setTimeout as it can cause race conditions and memory leaks
+      // Instead, perform cleanup synchronously but with guards
+      try {
         if (handsRef.current) {
           console.log("Closing hands model...");
           handsRef.current.close();
-          handsRef.current = null;
-          setHands(null);
         }
         
         if (poseRef.current) {
           console.log("Closing pose model...");
           poseRef.current.close();
-          poseRef.current = null;
-          setPose(null);
         }
-      };
-      
-      // Delay model cleanup slightly to avoid issues
-      setTimeout(cleanupModels, 300);
+        
+        // Clear all refs
+        handsRef.current = null;
+        poseRef.current = null;
+        cameraRef.current = null;
+        lastHandsResults.current = null;
+        lastPoseResults.current = null;
+      } catch (err) {
+        console.error("Error during model cleanup:", err);
+      }
     };
   }, []); // Empty dependency array to run only once during component mount
-
   // Start webcam and MediaPipe camera
   const startWebcam = async () => {
+    console.log("Starting webcam, checking models...");
+    console.log("Models status:", {
+      camera: cameraRef.current ? "loaded" : "not loaded",
+      hands: handsRef.current ? "loaded" : "not loaded",
+      pose: poseRef.current ? "loaded" : "not loaded"
+    });
+    
     // Ensure all models and camera are ready before starting
     if (!cameraRef.current || !handsRef.current || !poseRef.current) {
-      setError("Tracking models not yet loaded or initialized. Please wait.");
+      console.log("Some models are not loaded, attempting to initialize them");
+      setError("Tracking models not yet loaded. Trying to initialize...");
+      
+      // Give models a moment to initialize if they're in progress
+      setTimeout(() => {
+        if (handsRef.current && poseRef.current && cameraRef.current) {
+          console.log("Models loaded after waiting, starting webcam");
+          setError(null);
+          startWebcam();
+        } else {
+          setError("Could not initialize tracking models. Please refresh the page.");
+        }
+      }, 1000);
       return;
     }
 
@@ -397,6 +452,11 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Send file to parent component if onVideoUpload prop exists
+      if (onVideoUpload && typeof onVideoUpload === 'function') {
+        onVideoUpload(file);
+      }
+      
       const videoUrl = URL.createObjectURL(file);
 
       // Stop any active webcam stream before playing file
@@ -413,24 +473,29 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
         videoRef.current.srcObject = null; // Clear previous srcObject
         videoRef.current.src = videoUrl; // Set video file as source
         videoRef.current.load(); // Load the video to ensure metadata is available
-      }
-
-
-      videoRef.current.onloadedmetadata = () => {
+      }      videoRef.current.onloadedmetadata = () => {
         // Set canvas dimensions to match video dimensions
         if (canvasRef.current && videoRef.current) {
           canvasRef.current.width = videoRef.current.videoWidth;
           canvasRef.current.height = videoRef.current.videoHeight;
+          console.log("Video dimensions set:", videoRef.current.videoWidth, videoRef.current.videoHeight);
         }
-        videoRef.current.play();
-        setIsCameraOn(true); // Updated: Consider camera "on" when playing a file
+        
+        // Ensure MediaPipe models are initialized
+        if (!handsRef.current || !poseRef.current) {
+          console.warn("MediaPipe models not initialized yet for video file processing");
+        }
+        
+        videoRef.current.play().catch(e => {
+          console.error("Error playing video:", e);
+          setError("Could not play video: " + e.message);
+        });
+        
+        setIsCameraOn(true); // Consider camera "on" when playing a file
 
         // Process video frames using requestAnimationFrame
         const processVideoFrame = async () => {
           if (videoRef.current && !videoRef.current.paused && !videoRef.current.ended) {
-            let currentHandsResults = null;
-            let currentPoseResults = null;
-
             try {
               if (handsRef.current) {
                 await handsRef.current.send({ image: videoRef.current });
@@ -448,20 +513,19 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
             // Clear landmarks when video ends
             setHandJsonData('Video ended. No hands detected.');
             setPoseJsonData('Video ended. No pose detected.');
-            setIsCameraOn(false); // Updated: Camera "off" when video ends
+            setIsCameraOn(false); // Camera "off" when video ends
           }
         };
         requestAnimationFrame(processVideoFrame);
       };
     }
   };
-
   return (
-    <div className="flex flex-col items-center p-4 bg-gray-100 min-h-screen font-sans w-full">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">MediaPipe Landmark Extractor</h1>
+    <div className="flex flex-col bg-white p-6 rounded-xl shadow-md w-full">
+      <h2 className="text-2xl font-bold mb-5 text-gray-800">Video Input</h2>
 
       {isLoading && (
-        <div className="text-blue-600 text-lg mb-4">Loading tracking models...</div>
+        <div className="text-blue-600 text-lg mb-4 p-3 bg-blue-50 rounded-lg">Loading tracking models...</div>
       )}
       {error && (
         <div className="text-red-600 text-lg mb-4 p-3 bg-red-100 border border-red-400 rounded-lg">
@@ -469,73 +533,75 @@ export default function MediaPipeVideoUploader({ onLandmarks }) {
         </div>
       )}
 
-      <div className="flex flex-col w-full gap-6 max-w-[90%]">
-        {/* Video and Canvas Section */}
-        <div className="flex-1 flex flex-col items-center bg-white p-4 rounded-lg shadow-md">
-          <h2 className="text-xl font-semibold mb-3 text-gray-700">Live Feed with Hands & Pose Tracking</h2>
-          <div className="relative w-full max-w-md aspect-video rounded-lg overflow-hidden border-2 border-gray-300 mx-auto">
-            {/* The video element is now visible */}
-            <video
-              ref={videoRef}
-              className="absolute top-0 left-0 w-full h-full object-contain bg-black" // Use object-contain to avoid cropping
-              autoPlay
-              muted
-              playsInline
-            />
-            {/* The canvas displays the video feed with landmarks drawn on it, overlaying the video */}
-            <canvas
-              ref={canvasRef}
-              className="absolute top-0 left-0 w-full h-full object-contain" // Use object-contain
-            />
-          </div>
-
-          <div className="flex flex-wrap justify-center gap-4 mt-6">
-            {!isCameraOn ? (
-              <button
-                onClick={startWebcam}
-                disabled={isLoading || !handsRef.current || !poseRef.current || !cameraRef.current}
-                className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Loading...' : 'Enable Webcam'}
-              </button>
-            ) : (
-              <button
-                onClick={stopWebcam}
-                className="px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-75 transition duration-300 ease-in-out"
-              >
-                Turn Off Camera
-              </button>
-            )}
-
-            <label className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 transition duration-300 ease-in-out cursor-pointer">
-              Upload Video
-              <input
-                type="file"
-                accept="video/*"
-                onChange={handleFileUpload}
-                disabled={isLoading}
-                className="hidden"
-              />
-            </label>
-          </div>
+      {/* Video and Canvas Section */}
+      <div className="flex flex-col items-center w-full">
+        <div className="relative w-full aspect-video rounded-lg overflow-hidden border-2 border-gray-300 bg-black">
+          {/* The video element is now visible */}
+          <video
+            ref={videoRef}
+            className="absolute top-0 left-0 w-full h-full object-contain" 
+            autoPlay
+            muted
+            playsInline
+          />
+          {/* The canvas displays the video feed with landmarks drawn on it, overlaying the video */}
+          <canvas
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full object-contain"
+          />
         </div>
 
-        {/* JSON Output Section */}
-        <div className="flex flex-col md:flex-row gap-6 w-full">
-          <div className="flex-1 bg-white p-4 rounded-lg shadow-md flex flex-col">
-            <h2 className="text-xl font-semibold mb-3 text-gray-700">Hand Landmarks (JSON Output)</h2>
-            <pre className="bg-gray-800 text-green-400 p-4 rounded-lg overflow-auto h-[30vh] text-sm">
+        <div className="flex flex-wrap justify-center gap-4 mt-6 w-full">
+          {!isCameraOn ? (
+            <button
+              onClick={startWebcam}
+              disabled={isLoading || !handsRef.current || !poseRef.current || !cameraRef.current}
+              className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Loading Models...' : 'Enable Webcam'}
+            </button>
+          ) : (
+            <button
+              onClick={stopWebcam}
+              className="px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-75 transition duration-300 ease-in-out"
+            >
+              Turn Off Camera
+            </button>
+          )}
+
+          <label className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 transition duration-300 ease-in-out cursor-pointer">
+            Upload Video
+            <input
+              type="file"
+              accept="video/*"
+              onChange={handleFileUpload}
+              disabled={isLoading}
+              className="hidden"
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* Debug Information (Collapsible) */}
+      <details className="mt-6 border border-gray-200 rounded-lg p-2">
+        <summary className="font-semibold text-gray-700 cursor-pointer p-2">
+          Debug Information (Show/Hide Landmark Data)
+        </summary>
+        <div className="flex flex-col md:flex-row gap-4 p-2">
+          <div className="flex-1 p-3 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold mb-2 text-sm text-gray-700">Hand Landmarks</h3>
+            <pre className="bg-gray-800 text-green-400 p-3 rounded-lg overflow-auto h-[20vh] text-xs">
               <code>{handJsonData}</code>
             </pre>
           </div>
-          <div className="flex-1 bg-white p-4 rounded-lg shadow-md flex flex-col">
-            <h2 className="text-xl font-semibold mb-3 text-gray-700">Pose Landmarks (JSON Output)</h2>
-            <pre className="bg-gray-800 text-green-400 p-4 rounded-lg overflow-auto h-[30vh] text-sm">
+          <div className="flex-1 p-3 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold mb-2 text-sm text-gray-700">Pose Landmarks</h3>
+            <pre className="bg-gray-800 text-green-400 p-3 rounded-lg overflow-auto h-[20vh] text-xs">
               <code>{poseJsonData}</code>
             </pre>
           </div>
         </div>
-      </div>
+      </details>
     </div>
   );
 }

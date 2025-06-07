@@ -8,6 +8,7 @@ function App() {
   const [translation, setTranslation] = useState('');
   const [confidence, setConfidence] = useState(0);
   const [error, setError] = useState(null);
+  const [detectedGestures, setDetectedGestures] = useState([]);
   
   // Use refs to track frame counters and implement throttling
   const frameCounter = useRef(0);
@@ -15,8 +16,8 @@ function App() {
   const bufferRef = useRef([]);
   
   // Throttling configuration
-  const SEND_INTERVAL_MS = 2000; // Send data every 2 seconds at most
-  const FRAMES_TO_BUFFER = 30; // Buffer 30 frames before sending
+  const SEND_INTERVAL_MS = 1000; // Send data every 1 second at most
+  const FRAMES_TO_BUFFER = 15; // Buffer 15 frames before sending for more responsive feedback
   
   const handleLandmarks = useCallback((landmarksData) => {
     setLandmarks(landmarksData);
@@ -133,35 +134,51 @@ function App() {
       </header>
       
       <main className="container mx-auto p-4">
-        <VideoUploader onLandmarks={handleLandmarks} />
-        
-        {/* Translation Results */}
-        <section className="mt-8 bg-white rounded-xl shadow-md p-6">
-          <h2 className="text-2xl font-bold text-gray-700 mb-4">Translation Results</h2>
+        <div className="flex flex-col md:flex-row gap-6">
+          {/* Left Side - Video Uploader (70% width) */}
+          <div className="md:w-[70%]">
+            <VideoUploader 
+              onLandmarks={handleLandmarks} 
+              onVideoUpload={handleVideoUpload} 
+            />
+          </div>
           
-          {translation ? (
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-              <h3 className="text-lg font-semibold text-gray-800">Detected Sign:</h3>
-              <p className="text-3xl font-bold text-blue-700 my-2">{translation}</p>
+          {/* Right Side - Translation Results (30% width) */}
+          <div className="md:w-[30%]">
+            <section className="bg-white rounded-xl shadow-md p-6 h-full">
+              <h2 className="text-2xl font-bold text-gray-700 mb-6">Translation Results</h2>
               
-              {confidence > 0 && (
-                <div className="mt-2">
-                  <p className="text-sm text-gray-600">Confidence: {(confidence * 100).toFixed(1)}%</p>
-                  <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
-                    <div 
-                      className="bg-blue-600 h-2.5 rounded-full" 
-                      style={{ width: `${confidence * 100}%` }}
-                    ></div>
-                  </div>
+              {translation ? (
+                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <h3 className="text-lg font-semibold text-gray-800">Detected Sign:</h3>
+                  <p className="text-3xl font-bold text-blue-700 my-4">{translation}</p>
+                  
+                  {confidence > 0 && (
+                    <div className="mt-4">
+                      <p className="text-sm text-gray-600">Confidence: {(confidence * 100).toFixed(1)}%</p>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
+                        <div 
+                          className="bg-blue-600 h-2.5 rounded-full" 
+                          style={{ width: `${confidence * 100}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : processingStatus === 'processing' ? (
+                <div className="flex flex-col items-center justify-center h-64">
+                  <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+                  <p className="text-gray-600">Analyzing sign language...</p>
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <p className="text-gray-600 mb-4">No sign language detected yet.</p>
+                  <p className="text-gray-600">Try using the webcam or uploading a video.</p>
                 </div>
               )}
-            </div>
-          ) : processingStatus === 'processing' ? (
-            <p className="text-gray-600">Analyzing sign language...</p>
-          ) : (
-            <p className="text-gray-600">No sign language detected yet. Try using the webcam or uploading a video.</p>
-          )}
-        </section>
+            </section>
+          </div>
+        </div>
       </main>
       
       {/* Status Notifications */}
