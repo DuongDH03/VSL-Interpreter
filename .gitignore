@@ -1,0 +1,22 @@
+# .gitignore
+
+# React (client folder)
+client/node_modules/
+client/build/
+client/.env
+client/.DS_Store
+
+# Node.js and Express.js (server folder)
+server/node_modules/
+server/logs/
+server/*.log
+server/npm-debug.log*
+server/yarn-debug.log*
+server/yarn-error.log*
+server/.env
+server/.DS_Store
+server/node_modules
+# General
+.env
+.DS_Store
+Thumbs.db
