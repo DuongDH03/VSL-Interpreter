@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "setup": "python utils/setup_pyskl.py",
+    "setup:simple": "python utils/simple_setup.py",
+    "verify-model": "python verify_model.py",
+    "copy-model": "python utils/copy_model.py"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22-rc.20250304",
@@ -15,7 +19,7 @@
     "multer": "^1.4.5-lts.2"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.1.10"
   },
   "engines": {
     "node": ">=18.0.0"

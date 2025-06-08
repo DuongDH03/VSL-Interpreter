@@ -1,8 +1,20 @@
-const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
+const workerManager = require('./workerManager');
 
-// Helper function to run Python script
+// Initialize the Python worker when the server starts
+(async function initializeWorker() {
+    try {
+        console.log('Initializing Python inference worker...');
+        await workerManager.start();
+        console.log('Python inference worker started successfully!');
+    } catch (error) {
+        console.error('Failed to initialize Python worker:', error);
+    }
+})();
+
+// Legacy helper function for one-off Python script execution (for file uploads)
 function runPythonScript(scriptName, inputData, res) {
     const pythonProcess = spawn('python', [
         path.join(__dirname, '..', scriptName),
@@ -10,20 +22,37 @@ function runPythonScript(scriptName, inputData, res) {
     ]);
 
     let result = '';
+    let errors = '';
 
     pythonProcess.stdout.on('data', (data) => {
         result += data.toString();
     });
 
     pythonProcess.stderr.on('data', (data) => {
-        console.error(`Error: ${data}`);
+        errors += data.toString();
+        console.error(`Python error: ${data}`);
     });
 
     pythonProcess.on('close', (code) => {
-        if (code === 0) {
-            res.json({ result: JSON.parse(result) });
+        if (code === 0 && result) {
+            try {
+                const parsedResult = JSON.parse(result);
+                res.json({ result: parsedResult });
+            } catch (e) {
+                console.error('Failed to parse JSON result:', result);
+                res.status(500).json({
+                    error: 'Failed to parse result',
+                    details: result.substring(0, 1000), // Return part of result for debugging
+                    pythonErrors: errors
+                });
+            }
         } else {
-            res.status(500).send('Error processing the request.');
+            res.status(500).json({
+                error: 'Error processing the request',
+                code: code,
+                pythonErrors: errors,
+                stdout: result
+            });
         }
     });
 }
@@ -36,6 +65,8 @@ exports.translateVideo = (req, res) => {
 
     const videoPath = videoFile.path;
 
+    // For now, keep using the one-off script for video uploads
+    // In the future, this could be adapted to use the worker
     const pythonProcess = spawn('python', [
         path.join(__dirname, '..', 'stgcn_inference.py'),
         JSON.stringify({ video_path: videoPath }),
@@ -61,12 +92,23 @@ exports.translateVideo = (req, res) => {
     });
 };
 
-// Controller for live video translation
-exports.translateLiveVideo = (req, res) => {
-    const inputData = req.body;
-    // Add input type for Python script
-    inputData.input_type = "live";
-    runPythonScript('stgcn_inference.py', inputData, res);
+// Controller for live video translation - now using the persistent worker
+exports.translateLiveVideo = async (req, res) => {
+    try {
+        const { hands, pose } = req.body;
+        
+        // Process using the persistent Python worker
+        const result = await workerManager.processLandmarks(hands, pose);
+        
+        // Send response
+        res.json({ result });
+    } catch (error) {
+        console.error('Error in translateLiveVideo:', error);
+        res.status(500).json({
+            error: 'Failed to process landmarks',
+            message: error.message
+        });
+    }
 };
 
 // Controller for pre-recorded video translation

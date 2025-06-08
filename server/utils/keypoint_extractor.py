@@ -5,9 +5,9 @@ import mediapipe as mp
 from typing import List, Dict, Any, Optional, Tuple
 
 # Constants for ST-GCN++ input format
-NUM_FRAMES = 64  # ST-GCN++ expects a fixed number of frames
-NUM_JOINTS = 55  # Combined joint count (21 per hand * 2 + 33 pose keypoints - duplicates)
-NUM_CHANNELS = 3  # X, Y, Z coordinates
+NUM_FRAMES = 100  # ST-GCN++ expects a fixed number of frames
+NUM_JOINTS = 27  # Combined joint count (21 per hand * 2 + 33 pose keypoints - duplicates)
+NUM_CHANNELS = 3  # X, Y, confidence coordinates
 
 def extract_keypoints(
     hand_landmarks: Optional[List[Dict[str, Any]]] = None,
@@ -19,10 +19,9 @@ def extract_keypoints(
     Args:
         hand_landmarks: List of hand landmarks from MediaPipe
         pose_landmarks: List of pose landmarks from MediaPipe
-        
-    Returns:
+          Returns:
         np.ndarray: Formatted keypoints for ST-GCN++ with shape (C, T, V)
-        where C=3 (x,y,z), T=frames, V=joints
+        where C=3 (x,y,confidence), T=frames, V=joints
     """
     # Initialize empty array for keypoints
     keypoints = np.zeros((NUM_CHANNELS, 1, NUM_JOINTS))
@@ -33,12 +32,12 @@ def extract_keypoints(
         hand_idx = 0
         for hand in hand_landmarks:
             # Each hand has 21 landmarks
-            for i, landmark in enumerate(hand):
-                # MediaPipe landmark format is {x, y, z}
-                # Convert to array format [x, y, z]
+            for i, landmark in enumerate(hand):                # MediaPipe landmark format is {x, y, z}
+                # Convert to array format [x, y, confidence]
+                # Use 1.0 as default confidence for hand landmarks
                 keypoints[:, 0, hand_idx * 21 + i] = [landmark.get('x', 0), 
                                                     landmark.get('y', 0), 
-                                                    landmark.get('z', 0)]
+                                                    1.0]  # Fixed confidence instead of z-coordinate
             hand_idx += 1
             if hand_idx >= 2:
                 break  # Only process up to 2 hands
@@ -49,11 +48,10 @@ def extract_keypoints(
         # We'll store them after the hand landmarks
         for i, landmark in enumerate(pose_landmarks):
             # Skip landmarks that may conflict with hands
-            # Also store the key pose points that are relevant for sign language
-            if i < 33:  # Total pose landmarks
+            # Also store the key pose points that are relevant for sign language            if i < 33:  # Total pose landmarks
                 keypoints[:, 0, 42 + i] = [landmark.get('x', 0), 
                                           landmark.get('y', 0), 
-                                          landmark.get('z', 0)]
+                                          landmark.get('visibility', 1.0)]  # Use visibility as confidence
     
     return keypoints
 
@@ -96,43 +94,64 @@ class KeypointBuffer:
         Add keypoints from a new frame to the buffer.
         
         Args:
-            keypoints: Array with shape (C, 1, V)
+            keypoints: Array with shape (V, C)
             
         Returns:
             bool: True if buffer is full and ready for processing
         """
+        # Handle different possible input shapes
+        if keypoints.ndim == 3 and keypoints.shape[0] == 3 and keypoints.shape[1] == 1:
+            # Input is (C, T=1, V) format from old extract_keypoints
+            keypoints = np.transpose(keypoints[:, 0, :], (1, 0))  # Convert to (V, C)
+            
+        # Ensure keypoints are in (V, C) format
+        if keypoints.ndim != 2:
+            print(f"KeypointBuffer: Warning - expected (V,C) input but got shape {keypoints.shape}\n")
+            
+        # Add to buffer
         self.buffer.append(keypoints)
         
         # If buffer exceeds size, remove oldest frames
         if len(self.buffer) > self.buffer_size:
             self.buffer = self.buffer[-self.buffer_size:]
             
-        # Return True if buffer is ready for processing
+        # Return True if buffer is full and ready for processing
         return len(self.buffer) >= self.buffer_size
+
         
     def get_input(self) -> np.ndarray:
         """
         Get stacked keypoints as input for ST-GCN++.
         
         Returns:
-            np.ndarray: Array with shape (C, T, V)
+            np.ndarray: Array with shape (T, V, C)
         """
+        # If buffer is not full, pad with zeros or first frame
+        if len(self.buffer) == 0:
+            # Empty buffer, return zeros
+            return np.zeros((self.buffer_size, NUM_JOINTS, NUM_CHANNELS))
+        
         if len(self.buffer) < self.buffer_size:
-            # If buffer is not full, pad with zeros
+            # Pad with repeated first frame
             pad_size = self.buffer_size - len(self.buffer)
-            padding = [np.zeros_like(self.buffer[0]) for _ in range(pad_size)]
-            stacked = np.concatenate(padding + self.buffer, axis=1)
+            padding = [self.buffer[0].copy() for _ in range(pad_size)]  # Use first frame
+            frames_to_stack = padding + self.buffer
         else:
-            # Stack all frames along T dimension
-            stacked = np.concatenate(self.buffer, axis=1)
-            
-        # Apply normalization
-        return normalize_keypoints(stacked)
+            # Use the most recent buffer_size frames
+            frames_to_stack = self.buffer[-self.buffer_size:]
+        
+        # Stack frames along first dimension to get (T, V, C)
+        stacked = np.stack(frames_to_stack, axis=0)
+        return stacked
     
     def slide_window(self) -> None:
         """Slide window by step_size frames."""
         if len(self.buffer) >= self.step_size:
             self.buffer = self.buffer[self.step_size:]
+
+    def reset(self):
+        """Clears the buffer."""
+        self.buffer.clear()
 
 def process_frame(frame: np.ndarray, mp_hands, mp_pose) -> Tuple[List, List]:
     """
@@ -158,22 +177,20 @@ def process_frame(frame: np.ndarray, mp_hands, mp_pose) -> Tuple[List, List]:
     if hand_results.multi_hand_landmarks:
         for hand_landmarks in hand_results.multi_hand_landmarks:
             landmarks = []
-            for lm in hand_landmarks.landmark:
-                landmarks.append({
+            for lm in hand_landmarks.landmark:            landmarks.append({
                     'x': lm.x,
                     'y': lm.y,
-                    'z': lm.z
+                    'visibility': 1.0  # Use fixed confidence for hands as they don't have visibility
                 })
             hand_landmarks_list.append(landmarks)
     
     # Extract pose landmarks
     pose_landmarks_list = []
     if pose_results.pose_landmarks:
-        for lm in pose_results.pose_landmarks.landmark:
-            pose_landmarks_list.append({
+        for lm in pose_results.pose_landmarks.landmark:            pose_landmarks_list.append({
                 'x': lm.x,
                 'y': lm.y,
-                'z': lm.z
+                'visibility': lm.visibility  # Use actual visibility for pose landmarks
             })
     
     return hand_landmarks_list, pose_landmarks_list
