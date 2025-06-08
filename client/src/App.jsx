@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import VideoUploader from './components/VideoUploader';
+import TranslationResults from './components/TranslationResults';
+import { sendLandmarksToAPI, uploadVideoForProcessing } from './services/apiService';
+import { extractKeypoints, prepareModelInput } from './utils/keypointProcessor';
 import './App.css';
 
 function App() {
@@ -13,11 +16,11 @@ function App() {
   // Use refs to track frame counters and implement throttling
   const frameCounter = useRef(0);
   const lastSentTime = useRef(0);
-  const bufferRef = useRef([]);
-  
-  // Throttling configuration
+  const keypointBufferRef = useRef([]);
+    // Throttling configuration
   const SEND_INTERVAL_MS = 1000; // Send data every 1 second at most
   const FRAMES_TO_BUFFER = 15; // Buffer 15 frames before sending for more responsive feedback
+  const LAYOUT = 'hand_body_27'; // ST-GCN++ layout format
   
   const handleLandmarks = useCallback((landmarksData) => {
     setLandmarks(landmarksData);
@@ -26,67 +29,68 @@ function App() {
       // Increment frame counter
       frameCounter.current++;
       
-      // Add landmarks to buffer
-      bufferRef.current.push(landmarksData);
+      // Extract the keypoints in the ST-GCN++ format
+      const formattedKeypoints = extractKeypoints(
+        landmarksData.pose, 
+        landmarksData.hands,
+        LAYOUT
+      );
+      
+      // Add keypoints to buffer
+      keypointBufferRef.current.push(formattedKeypoints.keypoint[0]);
       
       // Keep buffer at desired size
-      if (bufferRef.current.length > FRAMES_TO_BUFFER) {
-        bufferRef.current.shift();
+      if (keypointBufferRef.current.length > FRAMES_TO_BUFFER * 2) {
+        keypointBufferRef.current.shift();
       }
       
       // Check if we should send data based on time and buffer size
       const now = Date.now();
       const timeSinceLastSend = now - lastSentTime.current;
       
-      if (bufferRef.current.length >= FRAMES_TO_BUFFER && 
+      if (keypointBufferRef.current.length >= FRAMES_TO_BUFFER && 
           timeSinceLastSend >= SEND_INTERVAL_MS) {
         // Reset counter and send landmarks
         frameCounter.current = 0;
         lastSentTime.current = now;
         
-        // Send the buffered landmarks
-        sendLandmarksToAPI({
-          hand_landmarks: landmarksData.hands,
-          pose_landmarks: landmarksData.pose
-        });
+        // Prepare model input with buffered keypoints
+        const modelInput = prepareModelInput(keypointBufferRef.current, FRAMES_TO_BUFFER);
+        
+        // Only send if we have enough data
+        if (modelInput) {
+          processLandmarks({
+            keypoints: modelInput,
+            raw_data: {
+              hand_landmarks: landmarksData.hands,
+              pose_landmarks: landmarksData.pose
+            }
+          });
+        }
       }
     }
   }, []);
-  
-  // Function to send landmarks to backend
-  const sendLandmarksToAPI = async (landmarksData) => {
+    // Function to process landmarks and send to backend
+  const processLandmarks = async (data) => {
     try {
       setProcessingStatus('processing');
       
-      // Send to server - be sure to use the correct server URL in production
-      const response = await fetch('http://localhost:3001/api/translate/live-video', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(landmarksData),
-      });
+      // Use the API service to send data
+      const result = await sendLandmarksToAPI(data);
+      console.log('API response:', result);
       
-      if (response.ok) {
-        const result = await response.json();
-        console.log('API response:', result);
-        
-        // Update UI with translation results
-        if (result.result && result.result.result) {
-          setTranslation(result.result.result);
-          // If confidence is provided by the model
-          if (result.result.confidence) {
-            setConfidence(result.result.confidence);
-          }
+      // Update UI with translation results
+      if (result.result && result.result.result) {
+        setTranslation(result.result.result);
+        // If confidence is provided by the model
+        if (result.result.confidence) {
+          setConfidence(result.result.confidence);
         }
-        
-        setProcessingStatus('success');
-      } else {
-        const errorText = await response.text();
-        throw new Error(`API error: ${errorText}`);
       }
+      
+      setProcessingStatus('success');
     } catch (error) {
-      console.error('Error sending landmarks to API:', error);
+      console.error('Error processing landmarks:', error);
       setError(error.message);
       setProcessingStatus('error');
     }
@@ -94,31 +98,22 @@ function App() {
 
   // Handle file upload for video processing
   const handleVideoUpload = async (file) => {
-    // Create form data
-    const formData = new FormData();
-    formData.append('video', file);
-    
     try {
       setProcessingStatus('processing');
       
-      const response = await fetch('http://localhost:3001/api/translate/video', {
-        method: 'POST',
-        body: formData,
-      });
+      // Use the API service to upload video
+      const result = await uploadVideoForProcessing(file);
+      console.log('Video processing result:', result);
       
-      if (response.ok) {
-        const result = await response.json();
-        console.log('Video processing result:', result);
-        
-        // Update translation result
-        if (result.result && result.result.result) {
-          setTranslation(result.result.result);
+      // Update translation result
+      if (result.result && result.result.result) {
+        setTranslation(result.result.result);
+        if (result.result.confidence) {
+          setConfidence(result.result.confidence);
         }
-        
-        setProcessingStatus('success');
-      } else {
-        throw new Error('Failed to process video');
       }
+      
+      setProcessingStatus('success');
     } catch (error) {
       console.error('Error uploading video:', error);
       setError(error.message);
@@ -142,61 +137,17 @@ function App() {
               onVideoUpload={handleVideoUpload} 
             />
           </div>
-          
-          {/* Right Side - Translation Results (30% width) */}
+            {/* Right Side - Translation Results (30% width) */}
           <div className="md:w-[30%]">
-            <section className="bg-white rounded-xl shadow-md p-6 h-full">
-              <h2 className="text-2xl font-bold text-gray-700 mb-6">Translation Results</h2>
-              
-              {translation ? (
-                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                  <h3 className="text-lg font-semibold text-gray-800">Detected Sign:</h3>
-                  <p className="text-3xl font-bold text-blue-700 my-4">{translation}</p>
-                  
-                  {confidence > 0 && (
-                    <div className="mt-4">
-                      <p className="text-sm text-gray-600">Confidence: {(confidence * 100).toFixed(1)}%</p>
-                      <div className="w-full bg-gray-200 rounded-full h-2.5 mt-1">
-                        <div 
-                          className="bg-blue-600 h-2.5 rounded-full" 
-                          style={{ width: `${confidence * 100}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : processingStatus === 'processing' ? (
-                <div className="flex flex-col items-center justify-center h-64">
-                  <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-                  <p className="text-gray-600">Analyzing sign language...</p>
-                </div>
-              ) : (
-                <div className="text-center py-12">
-                  <p className="text-gray-600 mb-4">No sign language detected yet.</p>
-                  <p className="text-gray-600">Try using the webcam or uploading a video.</p>
-                </div>
-              )}
-            </section>
+            <TranslationResults
+              translation={translation}
+              confidence={confidence}
+              processingStatus={processingStatus}
+              error={error}
+            />
           </div>
         </div>
       </main>
-      
-      {/* Status Notifications */}
-      {processingStatus === 'processing' && (
-        <div className="fixed bottom-4 right-4 bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg">
-          Processing sign language...
-        </div>
-      )}
-      {processingStatus === 'success' && (
-        <div className="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg">
-          Translation complete!
-        </div>
-      )}
-      {processingStatus === 'error' && (
-        <div className="fixed bottom-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg">
-          Error: {error || 'Failed to process sign language'}
-        </div>
-      )}
       
       <footer className="bg-gray-700 text-white text-center p-4 mt-8">
         <p>© 2025 Sign Language Interpreter - Powered by MediaPipe and ST-GCN++</p>
