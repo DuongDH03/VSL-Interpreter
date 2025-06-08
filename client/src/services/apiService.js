@@ -8,10 +8,13 @@ const API_URL = 'http://localhost:3001/api';
  * Send landmarks data to the server for live video translation
  * 
  * @param {Object} landmarksData - Object containing hand and pose landmarks
+ * @param {Array} [keypointBuffer=[]] - Buffer of previously processed keypoints for inference
+ * @param {Boolean} [runInference=false] - Whether to run inference on the server
  * @returns {Promise} - Promise that resolves with the translation results
  */
-export async function sendLandmarksToAPI(landmarksData) {
+export async function sendLandmarksToAPI(landmarksData, keypointBuffer = [], runInference = false) {
   try {
+    console.log('API request payload:', JSON.stringify(landmarksData, null, 2));
     const response = await fetch(`${API_URL}/translate/live-video`, {
       method: 'POST',
       headers: {

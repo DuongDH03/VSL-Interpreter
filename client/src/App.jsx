@@ -75,6 +75,15 @@ function App() {
     try {
       setProcessingStatus('processing');
       
+
+      // Make sure the keypoints are in the right format for the Python worker
+      const requestData = {
+        type: 'landmarks',  // Use the command type expected by the worker
+        keypoints: data.keypoints.keypoint[0]  // Send the correct format (V, C) array
+      };
+
+      console.log('Formatted request data:', requestData);
+    
       // Use the API service to send data
       const result = await sendLandmarksToAPI(data);
       console.log('API response:', result);
