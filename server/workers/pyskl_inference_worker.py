@@ -80,6 +80,7 @@ LABEL_MAP_FILE = os.path.join(PROJECT_ROOT, 'server', 'model', 'label_name.txt')
 LAYOUT = 'hand_body_27' # Must match layout for extractKeypointsJs in frontend
 DEVICE = 'cpu' # Use 'cuda' if GPU is available and configured
 NUM_FRAMES = 100 # Default window size (clip_len) from stgcnpp_hand27.py config
+NUM_JOINTS = 27 # Number of joints in hand_body_27 layout
 SLIDING_WINDOW_STEP = 8 # Default step size, for future use if worker supports sliding
 PREDICT_PER_NFRAME = 3 # Predict every N frames to reduce load, from your demo
 
@@ -212,12 +213,7 @@ def run_inference():
     
     # Create the dictionary that the PySKL test_pipeline expects
     # From `create_fake_anno` in original demo, keypoint is (M, T, V, C)
-    # The frontend extracts (V, C) per frame. My `extractKeypointsJs` produced `(1, V, C)` as the `currentUnifiedKeypoints`
-    # and the `onFrameResults` appends `currentUnifiedKeypoints` (which is `[[[x,y,v], ...]]`) to `keypointsBuffer`.
-    # So `keypoint_buffer_instance.get_input()` from the client would return a list of these,
-    # and would need to be stacked.
-    # Let's assume keypoint_buffer_instance.get_input() now returns the stacked (T, V, C) NumPy array
-    
+    # The frontend extracts (V, C) per frame. 
     # Convert from (T, V, C) to (M, T, V, C) where M=1 person for the pipeline input
     input_for_pipeline = np.expand_dims(buffered_sequence_np, axis=0) # Shape (1, T, V, C)
 
@@ -234,9 +230,24 @@ def run_inference():
     
     # Apply test pipeline if it exists (for PySKL model)
     if test_pipeline_instance:
+        sys.stderr.write(f"Worker: Input shape before pipeline: {input_for_pipeline.shape}\n")
+
         data_processed_by_pipeline = test_pipeline_instance(fake_anno)
         # The pipeline should output a dict with 'keypoint' tensor in (C, T, V, M) format
         input_tensor_for_model = data_processed_by_pipeline['keypoint']
+
+        sys.stderr.write(f"Worker: Tensor shape after pipeline: {input_tensor_for_model.shape}\n")
+
+
+        if input_tensor_for_model.ndim == 4:
+            # Add the missing person dimension (M=1)
+            # If shape is (N, C, T, V) we need to make it (N, C, T, V, M)
+            input_tensor_for_model = input_tensor_for_model.unsqueeze(0)
+            sys.stderr.write(f"Worker: Added missing dimension. New shape: {input_tensor_for_model.shape}\n")
+        elif input_tensor_for_model.ndim == 3: # Expected: (C, T, V) if M is squeezed by pipeline
+             # Add N and M=1 dimensions
+             input_tensor_for_model = input_tensor_for_model.unsqueeze(0).unsqueeze(-1) 
+             sys.stderr.write(f"Worker Debug: Tensor shape after unsqueeze(0) and unsqueeze(-1) for N, M: {input_tensor_for_model.shape}\n")
     else: # For placeholder model, manual tensor creation
         # Placeholder expects (N, C, T, V, M)
         # Convert (1, T, V, C) to (1, C, T, V, 1) or (N, C, T, V, M)
@@ -245,44 +256,59 @@ def run_inference():
         input_tensor_for_model = input_tensor_for_model.unsqueeze(-1) # -> (1, C, T, V, 1) M=1
     
     device = next(recognizer.parameters()).device
-    input_tensor_for_model = input_tensor_for_model.to(device)
+    input_tensor_for_model = input_tensor_for_model[None].to(device)
+
+    # Debug the tensor shape
+    sys.stderr.write(f"Worker: Final input tensor shape: {input_tensor_for_model.shape}\n")
 
     # Forward pass
     with torch.no_grad():
-        output_logits = recognizer(input_tensor_for_model, return_loss=False)[0] # Assuming batch size 1, get first element
-        
-        # Get probabilities with softmax
-        probabilities = F.softmax(output_logits, dim=0).cpu().numpy() # Output is typically 1D array of probabilities
+        output = recognizer(input_tensor_for_model, return_loss=False) # Assuming batch size 1, get first element
 
-    # Get top-k predictions
-    top_k = 3 
-    top_k_indices = np.argsort(probabilities)[-top_k:][::-1]
-    top_k_probs = probabilities[top_k_indices]
-    
-    class_names = get_class_names()
-    top_predictions = [class_names.get(str(idx), f"unknown_{idx}") for idx in top_k_indices]
-    
-    # Update last predictions for smoothing
-    if top_k_probs[0] > 0.3: # Using a confidence threshold from your original demo
-        last_predictions_deque.append(top_predictions[0])
-    
+        # Get the first element (assuming batch size 1)
+        # The output shape should be [batch_size, num_classes]
+        pred_scores = output[0]
+        
+        sys.stderr.write(f"Worker: Prediction scores shape: {pred_scores.shape}\n")
+        
+        # Convert to numpy for processing
+        pred_scores_np = pred_scores
+        
+        # Get the predicted label (class with max score)
+        pred_label = int(np.argmax(pred_scores_np))
+        pred_score = float(pred_scores_np[pred_label])
+        
+        class_names = get_class_names()
+
+        prediction = "Initializing..."
+
+        # Apply confidence threshold like the original
+        if pred_score < 0.3:
+            prediction = "Unknown"
+        else:
+            prediction = class_names[pred_label] if pred_label < len(class_names) else f"unknown_{pred_label}"
+        
+        # Update last predictions for smoothing - store just the class name without score
+        if pred_score > 0.3:
+            class_name = class_names[pred_label] if pred_label < len(class_names) else f"unknown_{pred_label}"
+            last_predictions_deque.append(class_name)
+
+
     # Apply temporal smoothing
     smoothed_prediction = "unknown"
-    smoothed_confidence = 0.0
     if last_predictions_deque:
         from collections import Counter
         prediction_counts = Counter(last_predictions_deque)
         most_common_entry = prediction_counts.most_common(1)[0]
         smoothed_prediction = most_common_entry[0]
-        smoothed_confidence = most_common_entry[1] / len(last_predictions_deque)
         
     return {
         "message": "Inference complete",
-        "raw_top_predictions": top_predictions,
-        "raw_confidences": top_k_probs.tolist(),
+        "prediction": prediction,
+        "smoothed_prediction": smoothed_prediction,  # Smoothed over time
         "prediction": smoothed_prediction,
-        "score": float(smoothed_confidence),
-        "label_index": int(top_k_indices[0]) # Return index of top raw prediction
+        "score": float(pred_score),
+        "label_index": int(pred_label) # Return index of top raw prediction
     }
 
 # --- Main Worker Loop ---
@@ -317,8 +343,9 @@ def main():
             request_type = input_data.get("type", "landmarks")
             
             if request_type == "landmarks":
-                # The frontend sends `unifiedKeypoints` (single frame, (1, V, C) or (V, C) format)
-                # It's an array of arrays from JS: `[[x,y,v], [x,y,v], ...]` (for one person's frame)
+                # Get the keypoints array from the input
+                # With the updated client code, we expect an array of (V, C) format keypoints
+                # where V=27 joints and C=3 channels (x, y, visibility)
                 current_frame_keypoints = input_data.get("keypoints") 
                 
                 if not current_frame_keypoints or not isinstance(current_frame_keypoints, list) or len(current_frame_keypoints) == 0:
@@ -326,15 +353,22 @@ def main():
                     sys.stdout.write(json.dumps(response) + '\n')
                     sys.stdout.flush()
                     continue
-
-                # Add the current frame's keypoints to the buffer
-                # KeypointBuffer's add_frame should expect a (V, C) numpy array or compatible list of lists
-                # The frontend's `extractKeypointsJs` returns `[[[x,y,v],...]]` so it's a list containing one `(V,C)` array.
-                # We need to pass the inner (V,C) array to `add_frame`.
-                # If frontend sends `keypoints: unifiedKeypoints[0]` then it's directly `(V,C)`
-                # Let's assume frontend sends `keypoints: unifiedKeypoints[0]` (the V,C array)
-                # (This is what `App.jsx`'s `sendLandmarksToAPI(landmarksData.unifiedKeypoints)` will do if `landmarksData.unifiedKeypoints` is `[[[x,y,v],...]]` and you send `unifiedKeypoints[0]`)
-                keypoint_buffer_instance.add_frame(np.array(current_frame_keypoints, dtype=np.float32))
+                # Log the received data format for debugging
+                sys.stderr.write(f"Worker: Received keypoints shape: {len(current_frame_keypoints)}x{len(current_frame_keypoints[0]) if len(current_frame_keypoints) > 0 else 0}\n")
+                
+                try:
+                    # Process keypoints data
+                    # Check if we received a single frame or multiple frames
+                    if isinstance(current_frame_keypoints[0][0], list):
+                        # Multiple frames: [[frame1], [frame2], ...] where each frame is (V, C)
+                        for frame_keypoints in current_frame_keypoints:
+                            keypoint_buffer_instance.add_frame(np.array(frame_keypoints, dtype=np.float32))
+                    else:
+                        # Single frame: direct (V, C) format
+                        keypoint_buffer_instance.add_frame(np.array(current_frame_keypoints, dtype=np.float32))
+                except Exception as e:
+                    sys.stderr.write(f"Worker: Error processing keypoints: {e}\n")
+                    sys.stderr.write(traceback.format_exc(file=sys.stderr))
                 
                 frame_idx_counter += 1
 
@@ -369,7 +403,7 @@ def main():
                 
             else:
                 sys.stderr.write(f"Worker: Unknown request type: {request_type}\n")
-                sys.stdout.write(json.dumps({"error": f"Unknown request type: {request_type}"}) + '\n')
+                sys.stdout.write(json.dumps({"error": f"Unknown reqKeypointBufferuest type: {request_type}"}) + '\n')
                 sys.stdout.flush()
                 
         except json.JSONDecodeError:

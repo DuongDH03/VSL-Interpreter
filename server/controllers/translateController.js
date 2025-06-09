@@ -95,10 +95,8 @@ exports.translateVideo = (req, res) => {
 // Controller for live video translation - now using the persistent worker
 exports.translateLiveVideo = async (req, res) => {
     try {
-        const { hands, pose } = req.body;
-        
         // Process using the persistent Python worker
-        const result = await workerManager.processLandmarks(hands, pose);
+        const result = await workerManager.processData(req.body);
         
         // Send response
         res.json({ result });

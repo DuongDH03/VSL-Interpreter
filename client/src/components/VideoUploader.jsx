@@ -5,7 +5,7 @@ import { useMediaPipe } from '../hooks/useMediaPipe';
  * Improved VideoUploader component with proper MediaPipe model lifecycle management
  * Leverages custom hook for MediaPipe handling
  */
-export default function VideoUploader({ onLandmarks, onVideoUpload }) {
+export default function VideoUploader({ onLandmarks, onVideoUpload, processingComplete }) {
   // MediaPipe hook handles model initialization, mounting, cleanup
   const {
     videoRef, 
@@ -18,7 +18,12 @@ export default function VideoUploader({ onLandmarks, onVideoUpload }) {
     startWebcam,
     stopWebcam,
     processVideoFile
-  } = useMediaPipe(onLandmarks);
+  } = useMediaPipe((landmarksData) => {
+    // Only pass the landmarks to parent if not in processing complete state
+    if (!processingComplete && onLandmarks) {
+      onLandmarks(landmarksData);
+    }
+  });
 
   // Handle video file upload
   const handleFileUpload = (e) => {
@@ -47,6 +52,12 @@ export default function VideoUploader({ onLandmarks, onVideoUpload }) {
           Error: {error}
         </div>
       )}
+      
+      {processingComplete && (
+        <div className="text-green-600 text-lg mb-4 p-3 bg-green-50 rounded-lg border border-green-200">
+          Sign detected! Click "Reset Detection" to continue recognition.
+        </div>
+      )}
 
       {/* Video and Canvas Section */}
       <div className="flex flex-col items-center w-full">
@@ -64,6 +75,15 @@ export default function VideoUploader({ onLandmarks, onVideoUpload }) {
             ref={canvasRef}
             className="absolute top-0 left-0 w-full h-full object-contain"
           />
+          
+          {processingComplete && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+              <div className="bg-white p-4 rounded-lg text-center shadow-lg">
+                <p className="font-bold text-xl text-green-700">Sign Detected!</p>
+                <p className="text-gray-600">Click "Reset Detection" to continue</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap justify-center gap-4 mt-6 w-full">
@@ -84,13 +104,13 @@ export default function VideoUploader({ onLandmarks, onVideoUpload }) {
             </button>
           )}
 
-          <label className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 transition duration-300 ease-in-out cursor-pointer">
+          <label className={`px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 transition duration-300 ease-in-out ${processingComplete || isLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
             Upload Video
             <input
               type="file"
               accept="video/*"
               onChange={handleFileUpload}
-              disabled={isLoading}
+              disabled={isLoading || processingComplete}
               className="hidden"
             />
           </label>

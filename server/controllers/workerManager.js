@@ -178,6 +178,16 @@ class PythonWorkerManager {
         });
     }
 
+    // Add this method to the PythonWorkerManager class
+    /**
+     * Process data directly using the Python worker
+     * @param {Object} data - Data to send to the worker
+     * @returns {Promise} - Resolves with inference results
+     */
+    async processData(data) {
+        return this.sendRequest(data);
+    }
+
     /**
      * Process landmarks using the Python worker
      * @param {Array} handLandmarks - Hand landmarks data

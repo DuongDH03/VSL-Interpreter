@@ -15,10 +15,10 @@
 export function extractKeypoints(poseData, handsData) {
   const numNodes = 27; // Using hand_body_27 exclusively
   
-  // Initialize keypoints array with zeros (M=1 person, V=nodes, C=3 coords)
-  const keypoints = Array(1).fill().map(() => 
-    Array(numNodes).fill().map(() => [0, 0, 0])
-  );
+  // Initialize keypoints array with zeros (V=nodes, C=3 coords)
+  // Create the direct (V, C) format expected by the Python worker
+  const keypoints = Array(numNodes).fill().map(() => [0, 0, 0]);
+  
   // Process pose landmarks if available
   if (poseData && poseData.length) {
     const landmarks = poseData;
@@ -28,32 +28,32 @@ export function extractKeypoints(poseData, handsData) {
     
     bodyIndices.forEach((mpIdx, i) => {
       if (landmarks[mpIdx]) {
-        keypoints[0][i][0] = landmarks[mpIdx].x;
-        keypoints[0][i][1] = landmarks[mpIdx].y;
-        keypoints[0][i][2] = landmarks[mpIdx].visibility || 1.0;
+        keypoints[i][0] = landmarks[mpIdx].x;
+        keypoints[i][1] = landmarks[mpIdx].y;
+        keypoints[i][2] = landmarks[mpIdx].visibility || 1.0;
       }
     });
     
     // Left wrist - index 7
     if (landmarks[15]) {
-      keypoints[0][7][0] = landmarks[15].x;
-      keypoints[0][7][1] = landmarks[15].y;
-      keypoints[0][7][2] = landmarks[15].visibility || 1.0;
+      keypoints[7][0] = landmarks[15].x;
+      keypoints[7][1] = landmarks[15].y;
+      keypoints[7][2] = landmarks[15].visibility || 1.0;
     }
     
     // Right wrist - index 17
     if (landmarks[16]) {
-      keypoints[0][17][0] = landmarks[16].x;
-      keypoints[0][17][1] = landmarks[16].y;
-      keypoints[0][17][2] = landmarks[16].visibility || 1.0;
+      keypoints[17][0] = landmarks[16].x;
+      keypoints[17][1] = landmarks[16].y;
+      keypoints[17][2] = landmarks[16].visibility || 1.0;
     }
   }
-
   // Process hand landmarks if available
   if (handsData && handsData.length) {
     // In MediaPipe, handedness is relative to the image (mirrored)
     // So "Left" hand in MediaPipe is actually Right hand in real-world
-    handsData.forEach(handLandmarks => {      // Determine if it's left or right hand
+    handsData.forEach(handLandmarks => {      
+      // Determine if it's left or right hand
       // In our case we have to infer from position since we don't have handedness data
       // A simple heuristic: if hand is on the left side of image, it's right hand in real-world
       const isLeftHand = determineHandedness(handLandmarks);
@@ -66,16 +66,16 @@ export function extractKeypoints(poseData, handsData) {
       if (isLeftHand) {
         // Left hand in real world (MediaPipe "Right")
         fingerIndices.forEach((mpIdx, i) => {
-          keypoints[0][8 + i][0] = handLandmarks[mpIdx].x;
-          keypoints[0][8 + i][1] = handLandmarks[mpIdx].y;
-          keypoints[0][8 + i][2] = 1.0; // MediaPipe hands don't have visibility
+          keypoints[8 + i][0] = handLandmarks[mpIdx].x;
+          keypoints[8 + i][1] = handLandmarks[mpIdx].y;
+          keypoints[8 + i][2] = 1.0; // MediaPipe hands don't have visibility
         });
       } else {
         // Right hand in real world (MediaPipe "Left")
         fingerIndices.forEach((mpIdx, i) => {
-          keypoints[0][18 + i][0] = handLandmarks[mpIdx].x;
-          keypoints[0][18 + i][1] = handLandmarks[mpIdx].y;
-          keypoints[0][18 + i][2] = 1.0;
+          keypoints[18 + i][0] = handLandmarks[mpIdx].x;
+          keypoints[18 + i][1] = handLandmarks[mpIdx].y;
+          keypoints[18 + i][2] = 1.0;
         });
       }
     });
@@ -117,9 +117,10 @@ export function prepareModelInput(keypointsBuffer, windowSize = 10) {
   // Take the last 'windowSize' frames
   const recentKeypoints = keypointsBuffer.slice(-windowSize);
   
-  // Format for model input, similar to create_fake_anno in the Python code
+  // Format for model input, matching the expected format in the Python worker
   return {
-    keypoint: recentKeypoints,
+    type: 'landmarks',
+    keypoints: recentKeypoints,
     total_frames: windowSize,
     frame_dir: 'NA',
     label: 0, // Dummy label

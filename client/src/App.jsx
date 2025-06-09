@@ -12,18 +12,27 @@ function App() {
   const [confidence, setConfidence] = useState(0);
   const [error, setError] = useState(null);
   const [detectedGestures, setDetectedGestures] = useState([]);
+  const [isProcessingComplete, setIsProcessingComplete] = useState(false);
   
   // Use refs to track frame counters and implement throttling
   const frameCounter = useRef(0);
   const lastSentTime = useRef(0);
   const keypointBufferRef = useRef([]);
-    // Throttling configuration
+  const processingRef = useRef(false);
+  
+  // Throttling configuration
   const SEND_INTERVAL_MS = 1000; // Send data every 1 second at most
   const FRAMES_TO_BUFFER = 15; // Buffer 15 frames before sending for more responsive feedback
   const LAYOUT = 'hand_body_27'; // ST-GCN++ layout format
+  const CONFIDENCE_THRESHOLD = 0.4; // Minimum confidence to consider a detection valid
   
   const handleLandmarks = useCallback((landmarksData) => {
     setLandmarks(landmarksData);
+    
+    // If we already have a high-confidence result or are currently processing, skip
+    if (isProcessingComplete || processingRef.current) {
+      return;
+    }
     
     if (landmarksData && (landmarksData.hands || landmarksData.pose)) {
       // Increment frame counter
@@ -36,64 +45,63 @@ function App() {
         LAYOUT
       );
       
-      // Add keypoints to buffer
-      keypointBufferRef.current.push(formattedKeypoints.keypoint[0]);
-      
-      // Keep buffer at desired size
-      if (keypointBufferRef.current.length > FRAMES_TO_BUFFER * 2) {
-        keypointBufferRef.current.shift();
-      }
-      
-      // Check if we should send data based on time and buffer size
-      const now = Date.now();
-      const timeSinceLastSend = now - lastSentTime.current;
-      
-      if (keypointBufferRef.current.length >= FRAMES_TO_BUFFER && 
-          timeSinceLastSend >= SEND_INTERVAL_MS) {
-        // Reset counter and send landmarks
-        frameCounter.current = 0;
-        lastSentTime.current = now;
-        
-        // Prepare model input with buffered keypoints
-        const modelInput = prepareModelInput(keypointBufferRef.current, FRAMES_TO_BUFFER);
-        
-        // Only send if we have enough data
-        if (modelInput) {
-          processLandmarks({
-            keypoints: modelInput,
-            raw_data: {
-              hand_landmarks: landmarksData.hands,
-              pose_landmarks: landmarksData.pose
-            }
-          });
-        }
-      }
+      // Process this single frame immediately (no buffering on the client)
+      processLandmarks({
+        type: 'landmarks',
+        keypoints: formattedKeypoints.keypoint  // Just send the current frame's keypoints
+      });
     }
-  }, []);
-    // Function to process landmarks and send to backend
+  }, [isProcessingComplete]);
+  
+  // Function to process landmarks and send to backend
   const processLandmarks = async (data) => {
     try {
+      // Prevent multiple concurrent API calls
+      if (processingRef.current) {
+        return;
+      }
+      
+      processingRef.current = true;
       setProcessingStatus('processing');
       
-
-      // Make sure the keypoints are in the right format for the Python worker
-      const requestData = {
-        type: 'landmarks',  // Use the command type expected by the worker
-        keypoints: data.keypoints.keypoint[0]  // Send the correct format (V, C) array
-      };
-
-      console.log('Formatted request data:', requestData);
+      // The keypoints are already properly formatted from prepareModelInput
+      // We can send them directly to the API service
+      console.log('Sending data to API:', data);
     
       // Use the API service to send data
       const result = await sendLandmarksToAPI(data);
       console.log('API response:', result);
       
       // Update UI with translation results
-      if (result.result && result.result.result) {
-        setTranslation(result.result.result);
+      if (result.result && result.prediction) {
+        setTranslation(result.prediction);
+        
         // If confidence is provided by the model
-        if (result.result.confidence) {
-          setConfidence(result.result.confidence);
+        if (result.score !== undefined) {
+          setConfidence(result.score);
+          
+          // Store detected gesture in history if it passes threshold
+          if (result.prediction !== "Unknown" && result.score > CONFIDENCE_THRESHOLD) {
+            setDetectedGestures(prev => {
+              const newGestures = [...prev, {
+                gesture: result.prediction,
+                confidence: result.score,
+                timestamp: new Date().toLocaleTimeString()
+              }];
+              // Keep only the most recent 10 gestures
+              return newGestures.slice(-10);
+            });
+            
+            // If we have a high-confidence prediction, stop processing for a while
+            if (result.score > 0.7) {
+              setIsProcessingComplete(true);
+              
+              // Resume processing after 3 seconds to allow for new gestures
+              setTimeout(() => {
+                setIsProcessingComplete(false);
+              }, 3000);
+            }
+          }
         }
       }
       
@@ -102,6 +110,8 @@ function App() {
       console.error('Error processing landmarks:', error);
       setError(error.message);
       setProcessingStatus('error');
+    } finally {
+      processingRef.current = false;
     }
   };
 
@@ -109,6 +119,7 @@ function App() {
   const handleVideoUpload = async (file) => {
     try {
       setProcessingStatus('processing');
+      processingRef.current = true;
       
       // Use the API service to upload video
       const result = await uploadVideoForProcessing(file);
@@ -119,6 +130,18 @@ function App() {
         setTranslation(result.result.result);
         if (result.result.confidence) {
           setConfidence(result.result.confidence);
+          
+          // Add to gesture history
+          if (result.result.result !== "Unknown" && result.result.confidence > CONFIDENCE_THRESHOLD) {
+            setDetectedGestures(prev => {
+              const newGestures = [...prev, {
+                gesture: result.result.result,
+                confidence: result.result.confidence,
+                timestamp: new Date().toLocaleTimeString()
+              }];
+              return newGestures.slice(-10);
+            });
+          }
         }
       }
       
@@ -127,8 +150,17 @@ function App() {
       console.error('Error uploading video:', error);
       setError(error.message);
       setProcessingStatus('error');
+    } finally {
+      processingRef.current = false;
     }
   };
+
+  // Reset processing state
+  const resetProcessingState = useCallback(() => {
+    setIsProcessingComplete(false);
+    setProcessingStatus('idle');
+    setError(null);
+  }, []);
 
   return (
     <div className="app-container w-full h-full min-h-screen bg-gray-100">
@@ -143,7 +175,8 @@ function App() {
           <div className="md:w-[70%]">
             <VideoUploader 
               onLandmarks={handleLandmarks} 
-              onVideoUpload={handleVideoUpload} 
+              onVideoUpload={handleVideoUpload}
+              processingComplete={isProcessingComplete}
             />
           </div>
             {/* Right Side - Translation Results (30% width) */}
@@ -153,7 +186,19 @@ function App() {
               confidence={confidence}
               processingStatus={processingStatus}
               error={error}
+              detectedGestures={detectedGestures} 
             />
+            
+            {isProcessingComplete && (
+              <div className="mt-4">
+                <button 
+                  onClick={resetProcessingState}
+                  className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full"
+                >
+                  Reset Detection
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </main>
