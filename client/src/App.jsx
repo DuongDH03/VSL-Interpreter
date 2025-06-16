@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import VideoUploader from './components/VideoUploader';
 import TranslationResults from './components/TranslationResults';
+import LearnComponent from './components/LearnComponent';
 import { sendLandmarksToAPI, uploadVideoForProcessing } from './services/apiService';
 import { extractKeypoints } from './utils/keypointProcessor'; // Removed prepareModelInput as it's not used here directly
 import './App.css';
@@ -13,6 +14,13 @@ function App() {
   const [error, setError] = useState(null);
   const [detectedGestures, setDetectedGestures] = useState([]);
   const [isProcessingComplete, setIsProcessingComplete] = useState(false);
+  
+  // Mode switching state - 'translate' or 'learn'
+  const [mode, setMode] = useState('translate');
+  
+  // Learn mode state
+  const [currentSign, setCurrentSign] = useState('16.MatTroi');
+  const [isCorrect, setIsCorrect] = useState(null);
 
   // Use refs to track frame counters and implement throttling
   const frameCounter = useRef(0);
@@ -24,13 +32,35 @@ function App() {
   const SEND_INTERVAL_MS = 1000; // Send data every 1 second at most
   const FRAMES_TO_BUFFER = 15; // Buffer 15 frames before sending for more responsive feedback
   const LAYOUT = 'hand_body_27'; // ST-GCN++ layout format
-  const CONFIDENCE_THRESHOLD = 0.4; // Minimum confidence to consider a detection valid
+  const CONFIDENCE_THRESHOLD = 0.4; // Minimum confidence to consider a detection valid  // Use refs to track the latest state values to avoid closure issues
+  const modeRef = useRef(mode);
+  const currentSignRef = useRef(currentSign);
+  const isProcessingCompleteRef = useRef(isProcessingComplete);
+  
+  // Keep refs updated with latest values
+  useEffect(() => {
+    modeRef.current = mode;
+    console.log(`App: mode ref updated to ${mode}`);
+  }, [mode]);
+  
+  useEffect(() => {
+    currentSignRef.current = currentSign;
+  }, [currentSign]);
+  
+  useEffect(() => {
+    isProcessingCompleteRef.current = isProcessingComplete;
+  }, [isProcessingComplete]);
 
   const handleLandmarks = useCallback((landmarksData) => {
     setLandmarks(landmarksData);
 
+    // Always use the ref values for the latest state
+    const currentMode = modeRef.current;
+    const currentExpectedSign = currentSignRef.current;
+    const isComplete = isProcessingCompleteRef.current;
+
     // If we already have a high-confidence result or are currently processing, skip
-    if (isProcessingComplete || processingRef.current) {
+    if (isComplete || processingRef.current) {
       return;
     }
 
@@ -43,22 +73,29 @@ function App() {
         landmarksData.pose,
         landmarksData.hands,
         LAYOUT
-      );
-
+      );      
+      
       // Process this single frame immediately (no buffering on the client)
       // Only process if enough time has passed since the last send, to avoid overwhelming the backend
       const now = Date.now();
       if (now - lastSentTime.current > SEND_INTERVAL_MS) {
-        processLandmarks({
+        // Log current mode for debugging
+        console.log(`Current mode in handleLandmarks: ${currentMode}`);
+        
+        // Add the current mode to the data payload
+        const payloadData = {
           type: 'landmarks',
-          keypoints: formattedKeypoints.keypoint // Just send the current frame's keypoints
-        });
+          keypoints: formattedKeypoints.keypoint, // Just send the current frame's keypoints
+          mode: currentMode, // Send the current mode to help the server
+          expectedSign: currentMode === 'learn' ? currentExpectedSign : undefined // Send the expected sign in learn mode
+        };
+        
+        console.log('Prepared payload with mode:', payloadData.mode);
+        processLandmarks(payloadData);
         lastSentTime.current = now; // Update last sent time
       }
     }
-  }, [isProcessingComplete]);
-
-  // Function to process landmarks and send to backend
+  }, []); // No dependencies as we use refs  // Function to process landmarks and send to backend
   const processLandmarks = async (data) => {
     try {
       // Prevent multiple concurrent API calls
@@ -69,11 +106,15 @@ function App() {
       processingRef.current = true;
       setProcessingStatus('processing'); // Set processing status at the start of API call
 
+      // Always use the current mode from the ref
+      const currentMode = modeRef.current;
+      
+      console.log('Current app mode (from ref):', currentMode);
       console.log('Sending data to API:', data);
 
       // Use the API service to send data
       const result = await sendLandmarksToAPI(data);
-      console.log('API response:', result);      // Update UI with translation results
+      console.log('API response:', result);// Update UI with translation results
       // First, check the structure of the response - it might be nested in result property
       let prediction = null;
       let score = null;
@@ -97,35 +138,85 @@ function App() {
         console.log('Buffering frames:', result.result?.message || 'No message');
         return;
       }
-      
-      // If we found a valid prediction, update the UI
+        // If we found a valid prediction, update the UI
       if (prediction) {
         setTranslation(prediction);
         
         if (score !== null) {
           setConfidence(score);
           console.log('Setting confidence to:', score);
+            // Handle the prediction differently based on current mode
+          const currentMode = modeRef.current;
+          console.log(`Processing result in mode (from ref): ${currentMode}`);
           
-          // Store detected gesture in history if it passes threshold
-          if (prediction !== "Unknown" && score > CONFIDENCE_THRESHOLD) {
-            setDetectedGestures(prev => {
-              const newGestures = [...prev, {
-                gesture: prediction,
-                confidence: score,
-                timestamp: new Date().toLocaleTimeString()
-              }];
-              // Keep only the most recent 10 gestures
-              return newGestures.slice(-10);
-            });
-
-            // If we have a high-confidence prediction, stop processing for a while
-            if (score > 0.7) {
-              setIsProcessingComplete(true);
-
-              // Resume processing after 3 seconds to allow for new gestures
-              setTimeout(() => {
-                setIsProcessingComplete(false);
-              }, 3000);
+          if (currentMode === 'translate') {
+            // Translation mode: store in history
+            if (prediction !== "Unknown" && score > CONFIDENCE_THRESHOLD) {
+              setDetectedGestures(prev => {
+                const newGestures = [...prev, {
+                  gesture: prediction,
+                  confidence: score,
+                  timestamp: new Date().toLocaleTimeString()
+                }];
+                // Keep only the most recent 10 gestures
+                return newGestures.slice(-10);
+              });
+  
+              // If we have a high-confidence prediction, stop processing for a while
+              if (score > CONFIDENCE_THRESHOLD) {
+                setIsProcessingComplete(true);
+  
+                // Resume processing after 3 seconds to allow for new gestures
+                setTimeout(() => {
+                  setIsProcessingComplete(false);
+                }, 3000);
+              }
+            }          } else if (currentMode === 'learn') {
+            console.log("===== LEARN MODE PROCESSING =====");
+            console.log("Current mode:", currentMode);
+            console.log("Prediction:", prediction);
+            console.log("Current sign:", currentSignRef.current);
+            console.log("Score:", score);
+            console.log("Confidence threshold:", CONFIDENCE_THRESHOLD);
+            
+            // Learn mode: check if prediction matches current sign
+            if (score > CONFIDENCE_THRESHOLD) {              // Try both with and without prefix numbers (16.MatTroi vs MatTroi)
+              const cleanPrediction = prediction.replace(/^\d+\./, '').trim();
+              const cleanCurrentSign = currentSignRef.current.replace(/^\d+\./, '').trim();
+                // Do more forgiving comparison - both exact match and cleaned match
+              const isExactMatch = prediction.toLowerCase() === currentSignRef.current.toLowerCase();
+              const isCleanMatch = cleanPrediction.toLowerCase() === cleanCurrentSign.toLowerCase();
+              
+              // Also check if prediction contains the sign name or vice versa
+              const predictionContainsSign = prediction.toLowerCase().includes(cleanCurrentSign.toLowerCase());
+              const signContainsPrediction = currentSign.toLowerCase().includes(cleanPrediction.toLowerCase());
+              
+              const isSignCorrect = isExactMatch || isCleanMatch || predictionContainsSign || signContainsPrediction;
+                console.log("Clean prediction:", cleanPrediction);
+              console.log("Clean current sign:", cleanCurrentSign);
+              console.log("Is exact match:", isExactMatch);
+              console.log("Is clean match:", isCleanMatch);
+              console.log("Prediction contains sign:", predictionContainsSign);
+              console.log("Sign contains prediction:", signContainsPrediction);
+              console.log("Final result - is sign correct:", isSignCorrect);
+              
+              setIsCorrect(isSignCorrect);
+              
+              // If correct, show success for a moment then reset
+              if (isSignCorrect) {
+                setIsProcessingComplete(true);
+                console.log("✓ CORRECT SIGN DETECTED! Setting processing complete.");
+                
+                // Reset after 3 seconds to allow for next attempt
+                setTimeout(() => {
+                  setIsProcessingComplete(false);
+                  setIsCorrect(null);
+                }, 3000);
+              } else {
+                console.log("✗ INCORRECT SIGN. Try again.");
+              }
+            } else {
+              console.log("Score too low to determine match:", score, "< threshold", CONFIDENCE_THRESHOLD);
             }
           }
         }
@@ -134,8 +225,8 @@ function App() {
       }
       setProcessingStatus('success'); // Set success status only after translation and confidence are updated
       console.log('Current state after API call:', { 
-        translation, 
-        confidence, 
+        translation: prediction, 
+        confidence: score, 
         processingStatus: 'success',
         error
       });
@@ -227,7 +318,6 @@ function App() {
       processingRef.current = false;
     }
   };
-
   // Reset processing state
   const resetProcessingState = useCallback(() => {
     setIsProcessingComplete(false);
@@ -235,45 +325,107 @@ function App() {
     setTranslation(''); // Clear translation on reset
     setConfidence(0); // Clear confidence on reset
     setError(null);
-  }, []);
+    
+    // Reset learn mode state if in learn mode
+    if (mode === 'learn') {
+      setIsCorrect(null);
+    }  }, [mode]);
+
   // Log current state values whenever they change for debugging
   useEffect(() => {
     console.log('App state updated:', {
+      mode,
       translation,
       confidence,
       processingStatus,
       error,
       isProcessingComplete,
+      currentSign: mode === 'learn' ? currentSign : null,
+      isCorrect: mode === 'learn' ? isCorrect : null,
       detectedGestures: detectedGestures.length
     });
-  }, [translation, confidence, processingStatus, error, isProcessingComplete, detectedGestures]);
-
+  }, [mode, translation, confidence, processingStatus, error, isProcessingComplete, currentSign, isCorrect, detectedGestures]);
   return (
-    <div className="app-container w-full h-full min-h-screen bg-gray-100">
+    <div className="app-container w-full h-full min-h-screen bg-gray-100">      {/* Debug Info Banner */}
+      <div className="bg-yellow-100 text-black p-2 text-center text-xs">
+        <p>
+          <strong>DEBUG INFO:</strong> 
+          Mode: <span className="font-mono bg-white p-1 rounded">{mode}</span> | 
+          Current Sign: <span className="font-mono bg-white p-1 rounded">{currentSign}</span> | 
+          Processing: <span className="font-mono bg-white p-1 rounded">{processingStatus}</span> | 
+          Complete: <span className="font-mono bg-white p-1 rounded">{String(isProcessingComplete)}</span>
+        </p>
+      </div>
+      
       <header className="bg-blue-600 text-white p-4 shadow-lg">
-        <h1 className="text-3xl font-bold text-center">Sign Language Interpreter</h1>
-        <p className="text-center mt-2">Using MediaPipe and ST-GCN++ for real-time sign language translation</p>
+        <div className="container mx-auto">
+          <h1 className="text-3xl font-bold text-center">Sign Language Interpreter</h1>
+          <p className="text-center mt-2">Using MediaPipe and ST-GCN++ for real-time sign language translation</p>
+          
+          {/* Mode Toggle Buttons */}
+          <div className="flex justify-center mt-4 gap-4">            <button 
+              onClick={() => {
+                console.log("Switching to translate mode");
+                setMode('translate');
+                // Reset any learn-specific state
+                setIsCorrect(null);
+              }} 
+              className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+                mode === 'translate' 
+                  ? 'bg-white text-blue-600' 
+                  : 'bg-blue-700 text-white hover:bg-blue-800'
+              }`}
+            >
+              Translate
+            </button>
+            <button 
+              onClick={() => {
+                console.log("Switching to learn mode");
+                setMode('learn');
+                // Reset any translate-specific state
+                setTranslation('');
+                setConfidence(0);
+              }} 
+              className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+                mode === 'learn' 
+                  ? 'bg-white text-blue-600' 
+                  : 'bg-blue-700 text-white hover:bg-blue-800'
+              }`}
+            >
+              Learn
+            </button>
+          </div>
+        </div>
       </header>
 
       <main className="container mx-auto p-4">
-        <div className="flex flex-col md:flex-row gap-6">
-          {/* Left Side - Video Uploader (70% width) */}
+        <div className="flex flex-col md:flex-row gap-6">          {/* Left Side - Video Uploader (70% width) */}
           <div className="md:w-[70%]">
             <VideoUploader
               onLandmarks={handleLandmarks}
               onVideoUpload={handleVideoUpload}
               processingComplete={isProcessingComplete}
+              mode={mode}
             />
           </div>
-            {/* Right Side - Translation Results (30% width) */}
+          {/* Right Side - Results (30% width) */}
           <div className="md:w-[30%]">
-            <TranslationResults
-              translation={translation}
-              confidence={confidence}
-              processingStatus={processingStatus}
-              error={error}
-              detectedGestures={detectedGestures}
-            />
+            {mode === 'translate' ? (
+              <TranslationResults
+                translation={translation}
+                confidence={confidence}
+                processingStatus={processingStatus}
+                error={error}
+                detectedGestures={detectedGestures}
+              />
+            ) : (
+              <LearnComponent
+                currentSign={currentSign}
+                isCorrect={isCorrect}
+                processingStatus={processingStatus}
+                error={error}
+              />
+            )}
 
             {isProcessingComplete && (
               <div className="mt-4">

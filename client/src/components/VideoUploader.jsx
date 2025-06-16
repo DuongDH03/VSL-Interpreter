@@ -1,11 +1,20 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useMediaPipe } from '../hooks/useMediaPipe';
 
 /**
  * Improved VideoUploader component with proper MediaPipe model lifecycle management
  * Leverages custom hook for MediaPipe handling
  */
-export default function VideoUploader({ onLandmarks, onVideoUpload, processingComplete }) {
+export default function VideoUploader({ onLandmarks, onVideoUpload, processingComplete, mode = 'translate' }) {
+  // Store current mode in a ref to access latest value in callbacks
+  const modeRef = useRef(mode);
+  
+  // Keep the ref updated with the latest mode value
+  useEffect(() => {
+    modeRef.current = mode;
+    console.log(`VideoUploader mode updated to: ${mode}`);
+  }, [mode]);
+  
   // MediaPipe hook handles model initialization, mounting, cleanup
   const {
     videoRef, 
@@ -17,10 +26,17 @@ export default function VideoUploader({ onLandmarks, onVideoUpload, processingCo
     poseJsonData,
     startWebcam,
     stopWebcam,
-    processVideoFile
-  } = useMediaPipe((landmarksData) => {
-    // Only pass the landmarks to parent if not in processing complete state
-    if (!processingComplete && onLandmarks) {
+    processVideoFile  } = useMediaPipe((landmarksData) => {
+    // Access the latest mode using the ref for the most up-to-date value
+    const currentMode = modeRef.current;
+    
+    // Debug logging
+    console.log(`[VideoUploader callback] Current mode from ref: ${currentMode}, Original mode prop: ${mode}`);
+    
+    // In learn mode, always pass landmarks regardless of processing state
+    // In translate mode, only pass if not in processing complete state
+    if ((currentMode === 'learn' || !processingComplete) && onLandmarks) {
+      console.log(`VideoUploader passing landmarks in ${currentMode} mode (processingComplete: ${processingComplete})`);
       onLandmarks(landmarksData);
     }
   });
@@ -121,15 +137,16 @@ export default function VideoUploader({ onLandmarks, onVideoUpload, processingCo
       <details className="mt-6 border border-gray-200 rounded-lg p-2">
         <summary className="font-semibold text-gray-700 cursor-pointer p-2">
           Debug Information (Show/Hide Landmark Data)
-        </summary>
-        <div className="flex flex-col md:flex-row gap-4 p-2">
+        </summary>      <div className="flex flex-col md:flex-row gap-4 p-2">
           <div className="flex-1 p-3 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold mb-2 text-sm text-gray-700">Mode: {mode}</h3>
             <h3 className="font-semibold mb-2 text-sm text-gray-700">Hand Landmarks</h3>
             <pre className="bg-gray-800 text-green-400 p-3 rounded-lg overflow-auto h-[20vh] text-xs">
               <code>{handJsonData}</code>
             </pre>
           </div>
           <div className="flex-1 p-3 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold mb-2 text-sm text-gray-700">Processing Complete: {String(processingComplete)}</h3>
             <h3 className="font-semibold mb-2 text-sm text-gray-700">Pose Landmarks</h3>
             <pre className="bg-gray-800 text-green-400 p-3 rounded-lg overflow-auto h-[20vh] text-xs">
               <code>{poseJsonData}</code>

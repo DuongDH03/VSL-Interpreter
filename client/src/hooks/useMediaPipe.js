@@ -15,6 +15,14 @@ export function useMediaPipe(onLandmarks) {
   const [handJsonData, setHandJsonData] = useState('No hands detected yet.');
   const [poseJsonData, setPoseJsonData] = useState('No pose detected yet.');
 
+  // Store callback in a ref to ensure we always use the latest version
+  const onLandmarksRef = useRef(onLandmarks);
+  
+  // Keep the ref updated with the latest callback
+  useEffect(() => {
+    onLandmarksRef.current = onLandmarks;
+  }, [onLandmarks]);
+
   // Refs for MediaPipe models that should persist between renders
   const handsRef = useRef(null);
   const poseRef = useRef(null);
@@ -130,17 +138,21 @@ export function useMediaPipe(onLandmarks) {
     } else {
       setPoseJsonData('No pose detected.');
     }
-    
-    // Call onLandmarks with combined data if available
-    if (onLandmarks && mountedRef.current) {
-      onLandmarks({
+      // Call onLandmarks with combined data if available
+    if (mountedRef.current) {      // Always use the latest callback function from the ref
+      if (onLandmarksRef.current) {
+        // Create landmarks data object
+        const landmarksData = {
           hands: handsResults?.multiHandLandmarks || null,
           pose: poseResults?.poseLandmarks || null
-      });
-    }
+        };
+        
+        // Call the latest callback
+        onLandmarksRef.current(landmarksData);
+      }}
 
     canvasCtx.restore();
-  }, [onLandmarks]);
+  }, []); // Remove onLandmarks from deps since we use ref
 
   // Combined callback for MediaPipe results from both models
   const onFrameResults = useCallback((handsResults, poseResults) => {
