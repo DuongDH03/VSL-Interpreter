@@ -2,7 +2,7 @@
  * API service to handle communications with the server
  */
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = '/api';
 
 /**
  * Send landmarks data to the server for live video translation
