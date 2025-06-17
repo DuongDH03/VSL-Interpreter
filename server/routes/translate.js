@@ -42,7 +42,5 @@ router.post('/live-video', translateLiveVideo);
 // Translate sign language from pre-recorded video
 router.post('/video', upload.single('video'), translateVideo);
 
-// Translate sign language from an image
-router.post('/image', upload.single('image'), translateImage);
 
 module.exports = router;

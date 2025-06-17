@@ -2,7 +2,6 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const translateRoutes = require('./routes/translate');
-const learnRoutes = require('./routes/learn');
 const fs = require('fs');
 const { checkPythonEnvironment } = require('./check_environment');
 
@@ -27,7 +26,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // API Routes
 app.use('/api/translate', translateRoutes);
-app.use('/api/learn', learnRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -49,7 +47,6 @@ app.listen(PORT, async () => {
     console.log(`API endpoints available at:`);
     console.log(`- POST http://localhost:${PORT}/api/translate/live-video`);
     console.log(`- POST http://localhost:${PORT}/api/translate/video`);
-    console.log(`- POST http://localhost:${PORT}/api/translate/image`);
     
     // Check Python environment on startup
     checkPythonEnvironment();

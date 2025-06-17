@@ -42,7 +42,7 @@ function runPythonScript(scriptName, inputData, res) {
                 console.error('Failed to parse JSON result:', result);
                 res.status(500).json({
                     error: 'Failed to parse result',
-                    details: result.substring(0, 1000), // Return part of result for debugging
+                    details: result.substring(0, 1000), 
                     pythonErrors: errors
                 });
             }
@@ -58,7 +58,7 @@ function runPythonScript(scriptName, inputData, res) {
 }
 
 exports.translateVideo = (req, res) => {
-    const videoFile = req.file; // Assuming you're using multer for file uploads
+    const videoFile = req.file; 
     if (!videoFile) {
         return res.status(400).json({ error: 'No video file uploaded' });
     }
@@ -92,7 +92,7 @@ exports.translateVideo = (req, res) => {
     });
 };
 
-// Controller for live video translation - now using the persistent worker
+// Controller for live video translation using the persistent worker
 exports.translateLiveVideo = async (req, res) => {
     try {
         // Process using the persistent Python worker
@@ -125,18 +125,3 @@ exports.translateVideo = (req, res) => {
     runPythonScript('stgcn_inference.py', inputData, res);
 };
 
-// Controller for image translation
-exports.translateImage = (req, res) => {
-    const imageFile = req.file; // Assuming you're using multer for file uploads
-    if (!imageFile) {
-        return res.status(400).json({ error: 'No image file uploaded' });
-    }
-
-    const imagePath = imageFile.path;
-    const inputData = {
-        input_type: "image",
-        image_path: imagePath
-    };
-    
-    runPythonScript('stgcn_inference.py', inputData, res);
-};
