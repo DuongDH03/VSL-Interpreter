@@ -25,7 +25,6 @@ server/            # Node.js server
   routes/          # Express routes
   utils/           # Utility modules
     keypoint_extractor.py  # Python module for landmark extraction
-  stgcn_inference.py  # Python script for ST-GCN++ inference
   server.js        # Express server setup
 ```
 
