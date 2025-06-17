@@ -2,7 +2,7 @@
  * API service to handle communications with the server
  */
 
-const API_URL = '/api';
+const API_URL = 'https://vsl-interpreter.onrender.com/api';
 
 /**
  * Send landmarks data to the server for live video translation
