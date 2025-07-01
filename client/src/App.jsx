@@ -3,7 +3,8 @@ import VideoUploader from './components/VideoUploader';
 import TranslationResults from './components/TranslationResults';
 import LearnComponent from './components/LearnComponent';
 import { sendLandmarksToAPI, uploadVideoForProcessing } from './services/apiService';
-import { extractKeypoints } from './utils/keypointProcessor'; // Removed prepareModelInput as it's not used here directly
+import { extractKeypoints } from './utils/keypointProcessor'; 
+import { resetWorkerBuffer } from './services/apiService'; 
 import './App.css';
 
 function App() {
@@ -14,12 +15,15 @@ function App() {
   const [error, setError] = useState(null);
   const [detectedGestures, setDetectedGestures] = useState([]);
   const [isProcessingComplete, setIsProcessingComplete] = useState(false);
-  
+  const [isPaused, setIsPaused] = useState(false);
+
+  const isPausedRef = useRef(false);
+
   // Mode switching state - 'translate' or 'learn'
   const [mode, setMode] = useState('translate');
   
   // Learn mode state
-  const [currentSign, setCurrentSign] = useState('16.MatTroi');
+  const [currentSign, setCurrentSign] = useState('5.Cam');
   const [isCorrect, setIsCorrect] = useState(null);
 
   // Use refs to track frame counters and implement throttling
@@ -37,6 +41,12 @@ function App() {
   const currentSignRef = useRef(currentSign);
   const isProcessingCompleteRef = useRef(isProcessingComplete);
   
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+    console.log(`App: isPaused ref updated to ${isPaused}`);
+  }, [isPaused]);
+
   // Keep refs updated with latest values
   useEffect(() => {
     modeRef.current = mode;
@@ -58,6 +68,12 @@ function App() {
     const currentMode = modeRef.current;
     const currentExpectedSign = currentSignRef.current;
     const isComplete = isProcessingCompleteRef.current;
+    const isPaused = isPausedRef.current;
+    
+    // If paused, don't process any landmarks
+    if (isPaused) {
+      return;
+    }
 
     // If we already have a high-confidence result or are currently processing, skip
     if (isComplete || processingRef.current) {
@@ -95,7 +111,9 @@ function App() {
         lastSentTime.current = now; // Update last sent time
       }
     }
-  }, []); // No dependencies as we use refs  // Function to process landmarks and send to backend
+  }, []); 
+
+
   const processLandmarks = async (data) => {
     try {
       // Prevent multiple concurrent API calls
@@ -165,11 +183,9 @@ function App() {
               // If we have a high-confidence prediction, stop processing for a while
               if (score > CONFIDENCE_THRESHOLD) {
                 setIsProcessingComplete(true);
-  
-                // Resume processing after 3 seconds to allow for new gestures
-                setTimeout(() => {
-                  setIsProcessingComplete(false);
-                }, 3000);
+                setIsPaused(true); 
+                isPausedRef.current = true;
+                
               }
             }          } else if (currentMode === 'learn') {
             console.log("===== LEARN MODE PROCESSING =====");
@@ -180,7 +196,7 @@ function App() {
             console.log("Confidence threshold:", CONFIDENCE_THRESHOLD);
             
             // Learn mode: check if prediction matches current sign
-            if (score > CONFIDENCE_THRESHOLD) {              // Try both with and without prefix numbers (16.MatTroi vs MatTroi)
+            if (score > CONFIDENCE_THRESHOLD) {              
               const cleanPrediction = prediction.replace(/^\d+\./, '').trim();
               const cleanCurrentSign = currentSignRef.current.replace(/^\d+\./, '').trim();
                 // Do more forgiving comparison - both exact match and cleaned match
@@ -202,17 +218,18 @@ function App() {
               
               setIsCorrect(isSignCorrect);
               
-              // If correct, show success for a moment then reset
               if (isSignCorrect) {
                 setIsProcessingComplete(true);
+                setIsPaused(true); 
+                isPausedRef.current = true; 
+
                 console.log("✓ CORRECT SIGN DETECTED! Setting processing complete.");
                 
-                // Reset after 3 seconds to allow for next attempt
-                setTimeout(() => {
-                  setIsProcessingComplete(false);
-                  setIsCorrect(null);
-                }, 3000);
+                
               } else {
+                setIsProcessingComplete(true);
+                setIsPaused(true); 
+                isPausedRef.current = true; 
                 console.log("✗ INCORRECT SIGN. Try again.");
               }
             } else {
@@ -319,12 +336,22 @@ function App() {
     }
   };
   // Reset processing state
-  const resetProcessingState = useCallback(() => {
+  const resetProcessingState = useCallback(async () => {
     setIsProcessingComplete(false);
     setProcessingStatus('idle');
     setTranslation(''); // Clear translation on reset
     setConfidence(0); // Clear confidence on reset
     setError(null);
+
+    setIsPaused(prev => !prev);
+
+    try {
+      if (isPausedRef.current) {
+        await resetWorkerBuffer();
+      }
+    } catch (error) {
+      console.error('Error resetting worker buffer:', error);
+    }
     
     // Reset learn mode state if in learn mode
     if (mode === 'learn') {
@@ -405,6 +432,7 @@ function App() {
               onLandmarks={handleLandmarks}
               onVideoUpload={handleVideoUpload}
               processingComplete={isProcessingComplete}
+              isPaused={isPaused}
               mode={mode}
             />
           </div>
@@ -433,7 +461,7 @@ function App() {
                   onClick={resetProcessingState}
                   className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full"
                 >
-                  Reset Detection
+                  {isPaused ? "Resume Detection" : "Reset Detection"}
                 </button>
               </div>
             )}

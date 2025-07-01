@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { translateLiveVideo, translateVideo, translateImage } = require('../controllers/translateController');
+const { translateLiveVideo, translateVideo, translateImage, resetBuffer } = require('../controllers/translateController');
 
 // Configure storage for uploaded files
 const storage = multer.diskStorage({
@@ -38,6 +38,8 @@ const router = express.Router();
 
 // Translate sign language from live video (no file upload)
 router.post('/live-video', translateLiveVideo);
+
+router.post('/reset-buffer', resetBuffer);
 
 // Translate sign language from pre-recorded video
 router.post('/video', upload.single('video'), translateVideo);

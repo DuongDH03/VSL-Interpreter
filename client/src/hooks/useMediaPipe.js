@@ -161,18 +161,10 @@ export function useMediaPipe(onLandmarks) {
     
     if (handsResults) {
       lastHandsResults.current = handsResults;
-      console.log("Received hand results:", 
-        handsResults.multiHandLandmarks?.length > 0 ? 
-        `${handsResults.multiHandLandmarks.length} hands detected` : 
-        "No hands detected");
     }
     
     if (poseResults) {
       lastPoseResults.current = poseResults;
-      console.log("Received pose results:",
-        poseResults.poseLandmarks ? 
-        "Pose detected" : 
-        "No pose detected");
     }
     
     // Render with the latest available data for both models

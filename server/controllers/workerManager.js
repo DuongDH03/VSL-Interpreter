@@ -207,7 +207,7 @@ class PythonWorkerManager {
      * @returns {Promise} - Resolves when buffer is reset
      */
     async resetBuffer() {
-        return this.sendRequest({ type: 'reset' });
+        return this.sendRequest({ type: 'reset_buffer' });
     }
 
     /**

@@ -88,3 +88,29 @@ export async function learnNewSign(data) {
     throw error;
   }
 }
+
+/**
+ * Reset the worker buffer on the server
+ * 
+ * @returns {Promise} - Promise that resolves when the buffer has been reset
+ */
+export async function resetWorkerBuffer() {
+  try {
+    const response = await fetch(`${API_URL}/translate/reset-buffer`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error resetting worker buffer:', error);
+    throw error;
+  }
+}

@@ -109,6 +109,16 @@ exports.translateLiveVideo = async (req, res) => {
     }
 };
 
+exports.resetBuffer = async (req,res) => {
+    try {
+        const result = await workerManager.resetBuffer();
+        res.json(result);
+    } catch (error) {
+        console.error('Error resetting buffer:', error);
+        res.status(500).json({error: 'Failed to reset buffer' });
+    }
+}
+
 // Controller for pre-recorded video translation
 exports.translateVideo = (req, res) => {
     const videoFile = req.file; // Assuming you're using multer for file uploads

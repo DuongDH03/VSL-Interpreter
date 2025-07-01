@@ -1,11 +1,21 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useMediaPipe } from '../hooks/useMediaPipe';
 
-/**
- * Improved VideoUploader component with proper MediaPipe model lifecycle management
- * Leverages custom hook for MediaPipe handling
- */
-export default function VideoUploader({ onLandmarks, onVideoUpload, processingComplete, mode = 'translate' }) {
+export default function VideoUploader({ 
+  onLandmarks,
+  onVideoUpload, 
+  processingComplete, 
+  isPaused = false,
+  mode = 'translate' }) {
+
+  // Store isPaused in a ref for access in callbacks
+  const isPausedRef = useRef(isPaused);
+  
+  // Keep the ref updated with the latest isPaused value
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+  
   // Store current mode in a ref to access latest value in callbacks
   const modeRef = useRef(mode);
   
@@ -68,8 +78,14 @@ export default function VideoUploader({ onLandmarks, onVideoUpload, processingCo
           Error: {error}
         </div>
       )}
+
+      {isPaused && (
+        <div className="text-yellow-600 text-lg mb-4 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+          Detection paused. Click "Resume Detection" to continue.
+        </div>
+      )}
       
-      {processingComplete && (
+      {processingComplete && !isPaused && (
         <div className="text-green-600 text-lg mb-4 p-3 bg-green-50 rounded-lg border border-green-200">
           Sign detected! Click "Reset Detection" to continue recognition.
         </div>
@@ -92,7 +108,7 @@ export default function VideoUploader({ onLandmarks, onVideoUpload, processingCo
             className="absolute top-0 left-0 w-full h-full object-contain"
           />
           
-          {processingComplete && (
+          {(processingComplete || isPaused) && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
               <div className="bg-white p-4 rounded-lg text-center shadow-lg">
                 <p className="font-bold text-xl text-green-700">Sign Detected!</p>
